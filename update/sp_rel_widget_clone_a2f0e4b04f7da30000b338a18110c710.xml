@@ -1,0 +1,524 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sp_rel_widget_clone">
+    <sp_rel_widget_clone action="INSERT_OR_UPDATE">
+        <child display_value="Copy of SC Shopping Cart">26f0e0f04f75a30000b338a18110c7a0</child>
+        <cloned>2018-11-13 04:45:34</cloned>
+        <last_validated>2018-11-13 04:45:34</last_validated>
+        <parent display_value="SC Shopping Cart">7589060c87290300e0ef0cf888cb0ba5</parent>
+        <payload>&lt;?xml version="1.0" encoding="UTF-8"?&gt;&lt;sp_widget&gt;&lt;category&gt;sc&lt;/category&gt;&lt;client_script&gt;&lt;![CDATA[function ($scope, spUtil, $location, spModal, spAriaUtil, $http) {
+	var c = this;
+	c.m = $scope.data.msgs;
+
+	$scope.$on("$sp.service_catalog.cart.update", function() {
+			$scope.server.update().then(function() {
+				$scope.$emit("$sp.service_catalog.cart.count", getItemCount());
+			});
+	});
+
+	c.updateQuantity = function(item) {
+		spAriaUtil.sendLiveMessage(c.data.msgs.updatedMsq + " " + item.name + " " + c.data.msgs.quantityToMsg + " " + item.quantity);
+
+		c.server.get({
+			action: "update_quantity",
+			itemID: item.sys_id,
+			quantity: item.quantity
+		}).then(function(response) {
+			$rootScope.$broadcast("$sp.service_catalog.cart.update");
+		});
+	}
+	
+	c.checkoutTwo = function() {
+		var hasItems = c.data.cartItems.filter(function(item) {
+			return item.sys_class_name != 'sc_cat_item_producer';
+		}).length &gt; 0;
+		if (hasItems) {
+			c.server.get({
+				cart: c.data.cart,
+				auto_redirect: c.options.auto_redirect || 'true',
+				action: "checkout_two"
+			}).then(function(response) {
+				var checkoutCartModalCtrl;
+				var unregisterOnCancel = $scope.$on('$sp.service_catalog.cart.cancel_order', function() {
+					checkoutCartModalCtrl.close();
+				});
+				
+				var unregisterOnSubmit = $scope.$on('$sp.service_catalog.cart.submitted', function() {
+					checkoutCartModalCtrl.close();
+				});
+
+				var checkoutCartModal = angular.copy(response.data.checkoutCartModal);
+				checkoutCartModal.options.afterOpen = function(ctrl){
+					checkoutCartModalCtrl = ctrl;
+				};
+				checkoutCartModal.options.afterClose = function() {
+					unregisterOnCancel();
+					unregisterOnSubmit();
+					c.checkoutCartModal = null;
+					checkoutCartModalCtrl = null;
+				};
+				c.checkoutCartModal = checkoutCartModal;
+			});
+		} else {
+			c.server.get({
+				action: "checkout"
+			}).then(function(response) {
+				var redirectUrl = 'id=sc_home';
+				if (response.data.result.sys_id)
+					redirectUrl = "id=ticket&amp;is_new_order=true&amp;table=" + response.data.result.table + "&amp;sys_id=" + response.data.result.sys_id;
+				$location.search(redirectUrl);
+				$rootScope.$broadcast("$sp.service_catalog.cart.update");
+				$rootScope.$broadcast("$sp.service_catalog.cart.submitted", true);
+			});
+		}
+	}
+
+	c.triggerCheckout = function($evt) {
+		$evt.stopPropagation();
+		$evt.preventDefault();
+
+		if (c.data.sys_properties.twostep) {
+			c.checkoutTwo();
+			return;
+		}
+		c.checkoutInProgress = true;
+		c.data.action = 'checkout';
+		c.server.update().then(function(response) {
+			c.data.action = null;
+			c.checkoutInProgress = false;
+			var result = $scope.data.result;
+			handleRedirect(result.number, result.table, result.sys_id);
+			$rootScope.$broadcast("$sp.service_catalog.cart.update");
+			$rootScope.$broadcast("$sp.service_catalog.cart.submitted", true);
+		});
+	}
+	
+	c.triggerCheckoutSmall = function($evt) {
+
+		if (c.data.sys_properties.twostep) {
+			$evt.stopPropagation();
+			$evt.preventDefault();
+			c.checkoutTwo();
+			return;
+		}
+		$location.search('id=sc_cart');
+	}
+
+	c.removeItem = function($evt, item) {
+		$evt.stopPropagation();
+		$evt.preventDefault();
+
+		var urlId = $location.url().split('sys_id=')[1];
+		if(urlId)
+			urlId = urlId.split('&amp;')[0];
+		var dialogMsg = urlId === item.sys_id ? c.data.msgs.removeEditingItemMsg : c.data.msgs.removeItemConfirmationMsg;
+		spModal.confirm(dialogMsg).then(function(confirmed) {
+			if (confirmed) {
+				$scope.server.get({
+					cartName: "DEFAULT",
+					action: "remove_item",
+					removeItemID: item.sys_id
+				}).then(function(response) {
+					c.data.cart = response.data.cart;
+					c.data.cartItems = response.data.cartItems;
+					spAriaUtil.sendLiveMessage(item.name + " " + c.data.msgs.itemRemovedMsg);
+					$rootScope.$broadcast("$sp.service_catalog.cart.update");
+					if (urlId === item.sys_id)
+						$location.search('id=sc_cart');
+				});
+			}
+		});
+	}
+
+	c.clearCart = function() {
+		spModal.confirm(c.data.msgs.clearCartConfirmationMsg).then(function(confirmed) {
+			if (confirmed) {
+				c.server.get({
+					action: "clear_cart"
+				}).then(function(response) {
+					c.data.cart = response.data.cart;
+					c.data.cartItems = response.data.cartItems
+					$rootScope.$broadcast("$sp.service_catalog.cart.update");
+					spUtil.addTrivialMessage(c.data.msgs.cartEmptiedMsg);
+				});
+			}
+		});
+	}
+	
+	c.saveBundle = function() {
+		var saveCartModalCtrl;
+		var unregister = $scope.$on('$sp.service_catalog.cart.save_cart', function(){
+			saveCartModalCtrl.close();
+		});
+
+		var saveCartModal = angular.copy(c.data.saveCartModal);
+		saveCartModal.options.afterOpen = function(ctrl){
+			saveCartModalCtrl = ctrl;
+		};
+		saveCartModal.options.afterClose = function() {
+			unregister();
+			c.saveCartModal = null;
+			saveCartModalCtrl = null;
+		};
+		c.saveCartModal = saveCartModal;
+	}
+	
+	c.showPrice = function(item) {
+		return item.show_price &amp;&amp; item.sys_class_name != 'sc_cat_item_producer';
+	}
+	
+	c.showQuantity = function(item) {
+		return item.show_quantity &amp;&amp; item.sys_class_name != 'sc_cat_item_producer';
+	}
+	
+	c.showRecurringPrice = function(item) {
+		return item.show_recurring_price &amp;&amp; item.sys_class_name != 'sc_cat_item_producer';
+	}
+
+	function handleRedirect(n, table, sys_id) {
+		$location.search('id=sc_request&amp;table=sc_request&amp;sys_id=' + sys_id);
+	}
+
+	$scope.$emit("$sp.service_catalog.cart.count", getItemCount());
+
+	function getItemCount() {
+		return c.data.cartItems.length || 0;
+	}
+
+	if(c.options.auto_update_cart === true || c.options.auto_update_cart === "true") {
+		spUtil.recordWatch($scope, 'sc_cart_item', 'cart.name=DEFAULT', function(resp) {
+			$scope.$emit("$sp.service_catalog.cart.update");
+			if(resp &amp;&amp; (resp.data &amp;&amp; resp.data.operation == "insert"))
+				$scope.$emit("$sp.service_catalog.cart.add_item");
+		});
+		$scope.$watch("c.data.cartItems", function() {
+			$scope.$emit("$sp.service_catalog.cart.count", getItemCount());
+		});
+	}
+}]]&gt;&lt;/client_script&gt;&lt;controller_as&gt;c&lt;/controller_as&gt;&lt;css&gt;td {
+  vertical-align: middle !important;
+}
+
+.media-body {
+  .btn-link {
+    padding-left: 0;
+    padding-right: 0;
+    color: $primary;
+
+    &amp;amp;:hover {
+      color: darken($primary, 10%);
+    }
+
+    &amp;amp;:focus {
+      color: darken($primary, 10%);
+    }
+  }
+}
+
+.btn-remove {
+  font-size: 18px !important;
+}
+
+.action-btn {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+
+  &amp;amp;.btn-link {
+    color: $primary;
+  }
+}
+
+.list-group {
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.list-group-item.ng-enter {
+  transition: all 1s;
+  -webkit-transition: all 1s;
+
+  background-color: #c0dcfa;
+}
+
+.list-group-item.ng-enter-active {
+  background-color: #fff;
+}
+
+.empty-cart {
+  font-style: italic;
+  text-align: center;
+  margin-top: 10px;
+  margin-bottom: 7px;
+}
+
+.view-carts-link {
+  text-align: center;
+  display: block;
+}
+
+.order-details-container {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  margin: 5px 10px 10px 10px;
+
+  .order-details {
+    padding: 5px;
+
+    textarea {
+      resize: none;
+      flex-basis: 100%;
+      flex-shrink: 1;
+      width: 100%;
+      box-sizing: border-box;
+    }
+  }
+
+  .requested-for-details {
+    flex: 1 0 auto;
+    max-width: 100%;
+  }
+
+  .special-instructions-details {
+    textarea {
+      height: calc(100% - 25px);
+    }
+  }
+}
+
+.item-image {
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 10px;
+}
+
+.empty-state-content {
+  margin-top: 30px;
+
+  &amp;amp;.small-cart {
+    margin-top: 0px;
+    padding: 10px 20px;
+  }
+
+  .fa-shopping-cart {
+    color: $gray-light;
+    font-size: 80px;
+    display: block;
+    text-align: center;
+
+    &amp;amp;.small-cart {
+      font-size: 40px;
+    }
+  }
+
+  .h3 {
+    text-align: center;
+    margin-bottom: 5px;
+  }
+
+  .h4 {
+    text-align: center;
+    margin-bottom: 5px;
+  }
+
+  p {
+    text-align: center;
+    margin-bottom: 20px;
+  }
+
+  .btn {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    width: 300px;
+    max-width: 100%;
+    margin-bottom: 35px;
+  }
+}
+
+.large-checkout {
+  display: inline-block;
+  float: none !important;
+  width: 100%;
+  margin-top: 15px;
+}
+
+.item-row:hover .btn-clear {
+	background-color: #f5f5f5;
+}
+
+.sc-btn {
+	margin-bottom: 10px;
+}
+
+.sc-btn-group {
+  clear: right;
+}
+
+.sc-remove-btn {
+   &amp;amp;:hover {
+     background-color: $danger;
+     color: #fff;
+     border-color: darken($danger, 10%);
+   }
+}
+
+.btn-group-justified &amp;gt; .btn-group {
+  	padding: 0 5px;
+  	.btn {
+  		border-radius: 4px !important;
+    }
+}
+
+.cart-table {
+  	th {
+      position: sticky;
+      -webkit-position: sticky;
+      top: -1px;
+      z-index: 10;
+      background-color: $panel-bg;
+      box-shadow: 0px 1px 0px $panel-inner-border;
+    }
+}
+
+@media only screen and (max-width : 992px) {
+  .sc-btn, .sc-btn-group {
+    width: 100%;
+  }
+  .item-image {
+    max-width: 70px;
+  }
+}
+&lt;/css&gt;&lt;data_table&gt;sp_instance&lt;/data_table&gt;&lt;demo_data/&gt;&lt;description/&gt;&lt;docs/&gt;&lt;field_list&gt;color&lt;/field_list&gt;&lt;has_preview&gt;false&lt;/has_preview&gt;&lt;id&gt;sc-shopping-cart-v2&lt;/id&gt;&lt;internal&gt;false&lt;/internal&gt;&lt;link/&gt;&lt;name&gt;SC Shopping Cart&lt;/name&gt;&lt;option_schema&gt;[{"name":"cartTemplate","section":"Behavior","default_value":"large_shopping_cart_v2.html","label":"Cart Template","type":"string"},{"hint":"This will sync cart across different sessions","name":"auto_update_cart","default_value":"false","section":"Behavior","label":"Auto update cart","type":"boolean"}]&lt;/option_schema&gt;&lt;public&gt;false&lt;/public&gt;&lt;roles/&gt;&lt;script&gt;&lt;![CDATA[(function() {
+	var m = data.msgs = {};
+	m.createdMsg = gs.getMessage("Created");
+	m.trackMsg = gs.getMessage("track using 'Requests' in the header or");
+	m.clickMsg = gs.getMessage("click here to view");
+	m.cartEmptiedMsg = gs.getMessage("Your cart has been emptied");
+	m.itemRemovedMsg = gs.getMessage("has been removed from your cart");
+	m.updatedMsq = gs.getMessage("Updated");
+	m.quantityToMsg = gs.getMessage("quantity to");
+	m.removeItemConfirmationMsg = gs.getMessage("Are you sure you want to remove this item?");
+	m.clearCartConfirmationMsg = gs.getMessage("Are you sure you want to empty your cart?");
+	m.removeEditingItemMsg = gs.getMessage("Are you sure you want to remove the item you are viewing from your Cart?");
+	var userID = gs.getUser().getID();
+	var cartName = input &amp;&amp; input.cartName ? input.cartName : '';
+	var cartJS = new sn_sc.CartJS(cartName, '' + userID);
+
+	data.sys_id = $sp.getParameter('sys_id');
+
+	if (input &amp;&amp; input.action === "checkout_two") {
+		data.checkoutCartModal = $sp.getWidget('widget-modal', {
+			embeddedWidgetId: 'sc-checkout',
+			embeddedWidgetOptions: {
+				cart: input.cart,
+				auto_redirect: input.auto_redirect
+			},
+			backdrop: 'static',
+			keyboard: false,
+			size: 'md'
+		});
+		return;
+	} else if (input &amp;&amp; input.action === 'checkout') {
+		var request = cartJS.checkoutCart(true);
+		data.result = {number: request.request_number, sys_id: request.request_id, table: 'sc_request'};
+		return;
+	}
+
+	var clGenerator = new GlideChoiceList();
+	var choiceListQuantity = clGenerator.getChoiceList("sc_cart_item", "quantity");
+	var choicelistQuantityData = [];
+	for (var i = 0; i &lt; choiceListQuantity.size(); i++) {
+		var choice = choiceListQuantity.get(i);
+		if (!isNaN(choice.getValue()))
+			choicelistQuantityData.push({value : parseInt(choice.getValue()), label : choice.getLabel()});
+	 }
+
+	data.choiceListQuantity = choicelistQuantityData;
+
+	if (input &amp;&amp; input.action === "update_quantity") {
+		var cartItemGR = new GlideRecord("sc_cart_item");
+		if (cartItemGR.get(input.itemID) &amp;&amp; cartItemGR.canRead()) {
+			cartItemGR.setValue("quantity", input.quantity);
+			cartItemGR.update();
+		}
+	}
+
+	if (input &amp;&amp; input.action === "checkout") {
+		var request = cartJS.checkoutCart(true);
+		data.requestData = {
+			number: request.request_number,
+			table: 'sc_request',
+			sys_id: request.request_id
+		}
+	}
+
+	if (input &amp;&amp; input.action === "remove_item") {
+		cartJS.remove(input.removeItemID);
+	}
+
+	if (input &amp;&amp; input.action === "clear_cart") {
+		cartJS.empty(cartJS.getCartID());
+	}
+
+	if (input &amp;&amp; input.action === "save_cart") {
+		var newCart = new SPCart(input.newCartName, userID);
+		newCart.setHidden(false);
+		newCart.loadCart(cart.getCartID());
+	}
+	
+	data.sys_properties = {
+		twostep: gs.getProperty("glide.sc.sp.twostep", "true") == 'true'
+	};
+	data.cart = cartJS.getCartDetails(true);
+	data.cartItems = [];
+	data.cart.recurring_subtotals = {};
+	for(var key in data.cart.cart_items)
+		if(typeof data.cart.cart_items[key] === 'object') {
+			var itemsByFrequency = data.cart.cart_items[key].items;
+			data.cartItems = data.cartItems.concat(itemsByFrequency);
+			if(key != 'none') {
+				var show_recurring_price = false;
+				for(var i=0; i&lt;itemsByFrequency.length; i++) {
+					if (itemsByFrequency[i].show_recurring_price)
+						show_recurring_price = true;
+				}
+				if (show_recurring_price)
+					data.cart.recurring_subtotals[data.cart.cart_items[key].frequency_label] = data.cart.cart_items[key].subtotal_recurring_price;
+			}
+		}
+	data.cartItems = data.cartItems.map(function (item) {
+		item.quantity = parseInt(item.quantity);
+		return item;
+	})
+	data.disable_req_for = sn_sc.CartJS.canViewRF();
+
+	data.saveCartModal = $sp.getWidget('widget-modal', {embeddedWidgetId: 'sc_save_bundle', embeddedWidgetOptions: {}});
+
+})();]]&gt;&lt;/script&gt;&lt;servicenow&gt;true&lt;/servicenow&gt;&lt;sys_class_name&gt;sp_widget&lt;/sys_class_name&gt;&lt;sys_created_by&gt;admin&lt;/sys_created_by&gt;&lt;sys_created_on&gt;2016-07-08 21:32:00&lt;/sys_created_on&gt;&lt;sys_id&gt;7589060c87290300e0ef0cf888cb0ba5&lt;/sys_id&gt;&lt;sys_mod_count&gt;353&lt;/sys_mod_count&gt;&lt;sys_name&gt;SC Shopping Cart&lt;/sys_name&gt;&lt;sys_package display_value="Service Portal - Service Catalog (do not activate...see plugin description)" source="com.glide.service-portal.service-catalog"&gt;5566376181d31300aadba4a47c598e61&lt;/sys_package&gt;&lt;sys_policy/&gt;&lt;sys_scope display_value="Global"&gt;global&lt;/sys_scope&gt;&lt;sys_update_name&gt;sp_widget_7589060c87290300e0ef0cf888cb0ba5&lt;/sys_update_name&gt;&lt;sys_updated_by&gt;admin&lt;/sys_updated_by&gt;&lt;sys_updated_on&gt;2018-06-21 13:15:52&lt;/sys_updated_on&gt;&lt;template&gt;&lt;![CDATA[&lt;div ng-if="options.cartTemplate"&gt;
+	&lt;div ng-include="options.cartTemplate"&gt;&lt;/div&gt;
+
+  &lt;sp-widget widget="c.checkoutCartModal" ng-if="c.checkoutCartModal"&gt;&lt;/sp-widget&gt;
+  &lt;sp-widget widget="c.saveCartModal" ng-if="c.saveCartModal"&gt;&lt;/sp-widget&gt;
+  
+&lt;/div&gt;
+
+&lt;div ng-if="!options.cartTemplate"&gt;
+  &lt;div class="alert alert-danger" role="alert"&gt;
+    &lt;strong&gt;${Error}: &lt;/strong&gt;
+    ${Please provide a cart template to render.}
+  &lt;/div&gt;
+&lt;/div&gt;]]&gt;&lt;/template&gt;&lt;/sp_widget&gt;</payload>
+        <sys_class_name>sp_rel_widget_clone</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2018-11-13 04:45:34</sys_created_on>
+        <sys_id>a2f0e4b04f7da30000b338a18110c710</sys_id>
+        <sys_mod_count>0</sys_mod_count>
+        <sys_name>26f0e0f04f75a30000b338a18110c7a0</sys_name>
+        <sys_package display_value="NeedIt" source="x_58872_needit">6ead8e780f603200cd674f8ce1050ed1</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="NeedIt">6ead8e780f603200cd674f8ce1050ed1</sys_scope>
+        <sys_update_name>sp_rel_widget_clone_a2f0e4b04f7da30000b338a18110c710</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2018-11-13 04:45:34</sys_updated_on>
+    </sp_rel_widget_clone>
+</record_update>
